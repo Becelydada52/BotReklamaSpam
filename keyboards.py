@@ -15,6 +15,7 @@ class Keyboards:
         buttons = []
         for i, vacancy in enumerate(vacancies):
             buttons.append([InlineKeyboardButton(text=vacancy["title"], callback_data=f"job:{city}:{i}")])
+        buttons.append([InlineKeyboardButton(text="⬅ Назад", callback_data="back:cities")])
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     @staticmethod
@@ -29,7 +30,8 @@ class Keyboards:
         buttons = []
         if _is_valid_http_url(url):
             buttons.append([InlineKeyboardButton(text="🔗 Перейти к вакансиям", url=url)])
-        buttons.append([InlineKeyboardButton(text="⬅ Назад", callback_data=f"city:{city}")])
+        buttons.append([InlineKeyboardButton(text="⬅ К списку работ", callback_data=f"back:jobs:{city}")])
+        buttons.append([InlineKeyboardButton(text="⬅ К городам", callback_data=f"back:cities")])
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     @staticmethod
@@ -48,3 +50,36 @@ class Keyboards:
             resize_keyboard=True,
             one_time_keyboard=False
         )
+
+    @staticmethod
+    def reply_menu(is_admin: bool = False):
+        if is_admin:
+            return ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="Главное меню"), KeyboardButton(text="Админка")]],
+                resize_keyboard=True,
+                one_time_keyboard=False
+            )
+        else:
+            return Keyboards.reply_start()
+
+    @staticmethod
+    def admin_back_to_city():
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅ Назад к городам", callback_data="admin_back_to_city")]]
+        )
+
+    @staticmethod
+    def admin_back_to_title():
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back_to_title")]]
+        )
+
+    @staticmethod
+    def admin_back_to_desc():
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back_to_desc")]]
+        )
+
+    @staticmethod
+    def back(callback_data: str, text: str = "⬅ Назад"):
+        return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=callback_data)]])
