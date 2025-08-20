@@ -41,6 +41,44 @@ class Jobservice:
         self.jobs[city].append({"title": title, "desc": desc, "url": url})
         self.save_jobs()
 
+    #==Расширенные операции (админка)==
+    def rename_city(self, old_city: str, new_city: str) -> bool:
+        if old_city not in self.jobs:
+            return False
+        if new_city in self.jobs and new_city != old_city:
+            return False
+        self.jobs[new_city] = self.jobs.pop(old_city)
+        self.save_jobs()
+        return True
+
+    def delete_city(self, city: str) -> bool:
+        if city in self.jobs:
+            del self.jobs[city]
+            self.save_jobs()
+            return True
+        return False
+
+    def update_job(self, city: str, index: int, title: str | None = None, desc: str | None = None, url: str | None = None) -> bool:
+        jobs = self.jobs.get(city)
+        if jobs is None or not (0 <= index < len(jobs)):
+            return False
+        if title is not None:
+            jobs[index]["title"] = title
+        if desc is not None:
+            jobs[index]["desc"] = desc
+        if url is not None:
+            jobs[index]["url"] = url
+        self.save_jobs()
+        return True
+
+    def delete_job(self, city: str, index: int) -> bool:
+        jobs = self.jobs.get(city)
+        if jobs is None or not (0 <= index < len(jobs)):
+            return False
+        jobs.pop(index)
+        self.save_jobs()
+        return True
+
     #==Админка==
     def load_admins(self) -> List[int]:
         try:

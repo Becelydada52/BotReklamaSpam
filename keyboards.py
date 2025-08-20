@@ -38,10 +38,40 @@ class Keyboards:
     def admin(cities):
         buttons = []
         for city in cities:
-            buttons.append([InlineKeyboardButton(text=city, callback_data=f"admin_city:{city}")])
+            buttons.append([
+                InlineKeyboardButton(text=f"📋 {city}", callback_data=f"manage_city:{city}"),
+                InlineKeyboardButton(text="➕ Добавить работу", callback_data=f"admin_city:{city}")
+            ])
         buttons.append([InlineKeyboardButton(text="➕ Добавить новый город", callback_data="admin_city:new")])
         buttons.append([InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back")])
         return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    @staticmethod
+    def admin_city_menu(city: str):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Переименовать город", callback_data=f"admin_city_rename:{city}")],
+            [InlineKeyboardButton(text="🗑 Удалить город", callback_data=f"admin_city_delete:{city}")],
+            [InlineKeyboardButton(text="📋 Список работ", callback_data=f"admin_jobs:{city}")],
+            [InlineKeyboardButton(text="⬅ Назад к городам", callback_data="admin_back_to_city")]
+        ])
+
+    @staticmethod
+    def admin_jobs(city: str, vacancies: list[dict]):
+        buttons = []
+        for i, v in enumerate(vacancies):
+            buttons.append([InlineKeyboardButton(text=v["title"], callback_data=f"admin_job:{city}:{i}")])
+        buttons.append([InlineKeyboardButton(text="⬅ Назад", callback_data=f"manage_city:{city}")])
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    @staticmethod
+    def admin_job_menu(city: str, index: int):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Название", callback_data=f"admin_job_edit_title:{city}:{index}")],
+            [InlineKeyboardButton(text="📝 Описание", callback_data=f"admin_job_edit_desc:{city}:{index}")],
+            [InlineKeyboardButton(text="🔗 Ссылка", callback_data=f"admin_job_edit_url:{city}:{index}")],
+            [InlineKeyboardButton(text="🗑 Удалить работу", callback_data=f"admin_job_delete:{city}:{index}")],
+            [InlineKeyboardButton(text="⬅ Назад к работам", callback_data=f"admin_jobs:{city}")]
+        ])
 
     @staticmethod
     def reply_start():
