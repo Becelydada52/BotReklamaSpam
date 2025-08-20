@@ -1,1 +1,2 @@
-API_TOKEN = "8434601694:AAH5AzY_UuSoNGF_Vo9hnpX-eZLaYFe8CLo"
+API_TOKEN = ""
+#если разработчик: @BotFather
