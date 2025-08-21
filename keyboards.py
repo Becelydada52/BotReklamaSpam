@@ -35,7 +35,7 @@ class Keyboards:
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     @staticmethod
-    def admin(cities):
+    def admin(cities, can_manage_roles: bool = False, can_manage_bot: bool = False):
         buttons = []
         for city in cities:
             buttons.append([
@@ -43,6 +43,10 @@ class Keyboards:
                 InlineKeyboardButton(text="➕ Добавить работу", callback_data=f"admin_city:{city}")
             ])
         buttons.append([InlineKeyboardButton(text="➕ Добавить новый город", callback_data="admin_city:new")])
+        if can_manage_roles:
+            buttons.append([InlineKeyboardButton(text="👤 Управление ролями", callback_data="roles_menu")])
+        if can_manage_bot:
+            buttons.append([InlineKeyboardButton(text="🛠 Управление ботом", callback_data="dev_menu")])
         buttons.append([InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back")])
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -82,8 +86,8 @@ class Keyboards:
         )
 
     @staticmethod
-    def reply_menu(is_admin: bool = False):
-        if is_admin:
+    def reply_menu(has_admin_access: bool = False):
+        if has_admin_access:
             return ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="Главное меню"), KeyboardButton(text="Админка")]],
                 resize_keyboard=True,
@@ -113,3 +117,27 @@ class Keyboards:
     @staticmethod
     def back(callback_data: str, text: str = "⬅ Назад"):
         return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=callback_data)]])
+
+    # ===Меню распределения ролей===
+    @staticmethod
+    def roles_menu(is_dev: bool):
+        buttons = [
+            [InlineKeyboardButton(text="➕ Добавить админа", callback_data="role:add_admin")],
+            [InlineKeyboardButton(text="➖ Удалить админа", callback_data="role:remove_admin")],
+            [InlineKeyboardButton(text="👥 Список администраторов", callback_data="roles:list_admins")],
+        ]
+        if is_dev:
+            buttons.extend([
+                [InlineKeyboardButton(text="➕ Добавить супер админа", callback_data="role:add_sadmin")],
+                [InlineKeyboardButton(text="➖ Удалить супер админа", callback_data="role:remove_sadmin")],
+            ])
+        buttons.append([InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back_to_city")])
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    @staticmethod
+    def dev_controls():
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Перезапустить", callback_data="dev:restart")],
+            [InlineKeyboardButton(text="⏹ Остановить", callback_data="dev:stop")],
+            [InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back_to_city")],
+        ])

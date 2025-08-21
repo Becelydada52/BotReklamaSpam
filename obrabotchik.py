@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import CommandStart
@@ -7,9 +7,49 @@ from aiogram.exceptions import TelegramBadRequest
 from keyboards import Keyboards
 from services import Jobservice
 from urllib.parse import urlparse
+import logging
+import sys
+import os
 
 router = Router()
 jobs_service = Jobservice()
+logger = logging.getLogger(__name__)
+
+
+
+async def resolve_to_user_id(text: str, bot) -> int | None:
+    logger.debug("resolve_to_user_id: raw='%s'", text)
+    value = text.strip()
+    if not value:
+        logger.debug("resolve_to_user_id: empty input")
+        return None
+    if value.startswith("@"):
+        try:
+            chat = await bot.get_chat(value)
+            uid = int(chat.id)
+            logger.debug("resolve_to_user_id: @ resolved username=%s -> uid=%d", value, uid)
+            return uid
+        except Exception as e:
+            logger.warning("resolve_to_user_id: failed to resolve username=%s error=%s", value, e)
+            return None
+    try:
+        uid = int(value)
+        logger.debug("resolve_to_user_id: parsed uid=%d", uid)
+        return uid
+    except ValueError:
+        logger.warning("resolve_to_user_id: invalid numeric value='%s'", value)
+        return None
+
+async def display_name(bot, uid: int) -> str:
+    try:
+        chat = await bot.get_chat(uid)
+        if getattr(chat, "username", None):
+            return f"@{chat.username}"
+        if getattr(chat, "full_name", None):
+            return f"{chat.full_name} ({uid})"
+    except Exception:
+        pass
+    return str(uid)
 
 
 async def send_new_and_delete(callback: CallbackQuery, text: str, reply_markup=None):
@@ -36,6 +76,22 @@ class AdminEdit(StatesGroup):
 def is_admin(user_id: int) -> bool:
     return jobs_service.is_admin(user_id)
 
+def is_super_admin(user_id: int) -> bool:
+    return jobs_service.is_super_admin(user_id)
+
+def is_developer(user_id: int) -> bool:
+    return jobs_service.is_developer(user_id)
+
+def has_admin_access(user_id: int) -> bool:
+    return jobs_service.has_admin_access(user_id)
+
+
+class RolesEdit(StatesGroup):
+    add_admin = State()
+    remove_admin = State()
+    add_sadmin = State()
+    remove_sadmin = State()
+
 
 #==Пользователь==
 @router.message(CommandStart())
@@ -45,7 +101,7 @@ async def start_cmd(message: Message):
         return await message.answer("⚠ В базе пока нет городов.")
     await message.answer(
         "Главное меню",
-        reply_markup=Keyboards.reply_menu(is_admin(message.from_user.id))
+        reply_markup=Keyboards.reply_menu(has_admin_access(message.from_user.id))
     )
     await message.answer("👋Здравствуйте! Это бот по поиску работы. Скорее выбирай город. Выберите город:", reply_markup=Keyboards.cities(cities))
 
@@ -55,18 +111,22 @@ async def back_to_start(message: Message):
 
 @router.message(F.text.casefold() == "админка")
 async def open_admin_panel(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
+    if not has_admin_access(message.from_user.id):
         return await message.answer("⚠ У вас нет прав администратора.")
     await state.set_state(AddJob.city_choise)
     await message.answer(
         "📍 Выберите город или добавьте новый:",
-        reply_markup=Keyboards.admin(jobs_service.get_cities())
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(message.from_user.id) or is_developer(message.from_user.id)),
+            can_manage_bot=is_developer(message.from_user.id)
+        )
     )
 
 # == Админ: управление городом и работами ==
 @router.callback_query(F.data.startswith("manage_city:"))
 async def admin_manage_city(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     city = callback.data.split(":")[1]
     await state.update_data(city=city)
@@ -75,7 +135,7 @@ async def admin_manage_city(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_jobs:"))
 async def admin_list_jobs(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     city = callback.data.split(":")[1]
     await state.update_data(city=city)
@@ -86,7 +146,7 @@ async def admin_list_jobs(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_job:"))
 async def admin_job_menu(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     _, city, idx = callback.data.split(":")
     index = int(idx)
@@ -98,7 +158,7 @@ async def admin_job_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_city_rename:"))
 async def admin_city_rename_start(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     city = callback.data.split(":")[1]
     await state.update_data(city=city)
@@ -117,22 +177,36 @@ async def admin_city_rename_finish(message: Message, state: FSMContext):
     await state.clear()
     if not ok:
         return await message.answer("⚠ Не удалось переименовать (возможно, новое имя уже существует)")
-    await message.answer("✅ Город переименован", reply_markup=Keyboards.admin(jobs_service.get_cities()))
+    await message.answer(
+        "✅ Город переименован",
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(message.from_user.id) or is_developer(message.from_user.id)),
+            can_manage_bot=is_developer(message.from_user.id)
+        )
+    )
 
 @router.callback_query(F.data.startswith("admin_city_delete:"))
 async def admin_city_delete(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     city = callback.data.split(":")[1]
     ok = jobs_service.delete_city(city)
     text = "✅ Город удалён" if ok else "⚠ Не удалось удалить город"
     await state.set_state(AddJob.city_choise)
-    await callback.message.edit_text(text, reply_markup=Keyboards.admin(jobs_service.get_cities()))
+    await callback.message.edit_text(
+        text,
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(callback.from_user.id) or is_developer(callback.from_user.id)),
+            can_manage_bot=is_developer(callback.from_user.id)
+        )
+    )
     await callback.answer()
 
 @router.callback_query(F.data.startswith("admin_job_edit_title:"))
 async def admin_job_edit_title_start(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     _, city, idx = callback.data.split(":")
     await state.update_data(city=city, index=int(idx))
@@ -152,7 +226,7 @@ async def admin_job_edit_title_finish(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_job_edit_desc:"))
 async def admin_job_edit_desc_start(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     _, city, idx = callback.data.split(":")
     await state.update_data(city=city, index=int(idx))
@@ -172,7 +246,7 @@ async def admin_job_edit_desc_finish(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_job_edit_url:"))
 async def admin_job_edit_url_start(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     _, city, idx = callback.data.split(":")
     await state.update_data(city=city, index=int(idx))
@@ -195,7 +269,7 @@ async def admin_job_edit_url_finish(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_job_delete:"))
 async def admin_job_delete(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
+    if not has_admin_access(callback.from_user.id):
         return await callback.answer("Нет прав", show_alert=True)
     _, city, idx = callback.data.split(":")
     index = int(idx)
@@ -260,10 +334,17 @@ async def back_to_jobs(callback: CallbackQuery):
 #==Админка через FSM(не знаешь не лезь)==
 @router.message(F.text == "/addjob")
 async def cmd_addjob(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
+    if not has_admin_access(message.from_user.id):
         return await message.answer("⚠ У вас нет прав администратора.")
     await state.set_state(AddJob.city_choise)
-    await message.answer("📍 Выберите город или добавьте новый:", reply_markup=Keyboards.admin(jobs_service.get_cities()))
+    await message.answer(
+        "📍 Выберите город или добавьте новый:",
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(message.from_user.id) or is_developer(message.from_user.id)),
+            can_manage_bot=is_developer(message.from_user.id)
+        )
+    )
 
 @router.callback_query(F.data.startswith("admin_city:"))
 async def fsm_city(callback: CallbackQuery, state: FSMContext):
@@ -326,6 +407,262 @@ async def fsm_url(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Вакансия добавлена!\n📍 {city}\n💼 {title}\n📝 {desc}\n🔗 {url_text}")
 
+# === Управление ролями ===
+@router.callback_query(F.data == "roles_menu")
+async def open_roles_menu(callback: CallbackQuery):
+    uid = callback.from_user.id
+    if not (is_super_admin(uid) or is_developer(uid)):
+        logger.warning("open_roles_menu: no permissions uid=%d", uid)
+        return await callback.answer("Нет прав", show_alert=True)
+    await callback.message.edit_text(
+        "👤 Управление ролями",
+        reply_markup=Keyboards.roles_menu(is_dev=is_developer(uid))
+    )
+    logger.debug("open_roles_menu shown to uid=%d", uid)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("role:"))
+async def role_action_start(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split(":")[1]
+    uid = callback.from_user.id
+    if action in ("add_admin", "remove_admin"):
+        if not (is_super_admin(uid) or is_developer(uid)):
+            return await callback.answer("Нет прав", show_alert=True)
+    elif action in ("add_sadmin", "remove_sadmin"):
+        if not is_developer(uid):
+            return await callback.answer("Нет прав", show_alert=True)
+
+    mapping = {
+        "add_admin": (RolesEdit.add_admin, "Введите @username или user_id для добавления в Админы:"),
+        "remove_admin": (RolesEdit.remove_admin, "Введите @username или user_id для удаления из Админов:"),
+        "add_sadmin": (RolesEdit.add_sadmin, "Введите @username или user_id для добавления в Супер Админы:"),
+        "remove_sadmin": (RolesEdit.remove_sadmin, "Введите @username или user_id для удаления из Супер Админов:"),
+    }
+    state_to_set, prompt = mapping[action]
+    await state.set_state(state_to_set)
+    await send_new_and_delete(callback, f"{prompt}", reply_markup=Keyboards.admin_back_to_city())
+    await callback.answer()
+
+
+# == Список администраторов ==
+@router.callback_query(F.data == "roles:list_admins")
+async def list_admins(callback: CallbackQuery):
+    uid = callback.from_user.id
+    if not (is_super_admin(uid) or is_developer(uid)):
+        logger.warning("list_admins: no permissions uid=%d", uid)
+        return await callback.answer("Нет прав", show_alert=True)
+    roles = jobs_service.roles
+    logger.debug(
+        "list_admins opened by uid=%d (admins=%d, sadmins=%d, devs=%d)",
+        uid, len(roles.get("admins", [])), len(roles.get("super_admins", [])), len(roles.get("developers", []))
+    )
+    text = "👥 Выберите пользователя для управления ролями"
+    all_ids = set(roles.get("admins", [])) | set(roles.get("super_admins", [])) | set(roles.get("developers", []))
+    buttons = []
+    for tid in sorted(all_ids):
+        name = await display_name(callback.message.bot, tid)
+        tags = []
+        if tid in roles.get("admins", []):
+            tags.append("Админ")
+        if tid in roles.get("super_admins", []):
+            tags.append("Супер-Админ")
+        if tid in roles.get("developers", []):
+            tags.append("Разработчик")
+        tag_str = ",".join(tags)
+        label = f"{name} — {tag_str}" if tag_str else name
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"roles:manage_user:{tid}")])
+    buttons.append([InlineKeyboardButton(text="⬅ Назад", callback_data="roles_menu")])
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons if buttons else [[InlineKeyboardButton(text="⬅ Назад", callback_data="roles_menu")]])
+    await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("roles:manage_user:"))
+async def manage_user(callback: CallbackQuery):
+    actor = callback.from_user.id
+    if not (is_super_admin(actor) or is_developer(actor)):
+        logger.warning("manage_user: no permissions actor=%d data=%s", actor, callback.data)
+        return await callback.answer("Нет прав", show_alert=True)
+    target_id = int(callback.data.split(":")[2])
+    logger.debug("manage_user: actor=%d target=%d", actor, target_id)
+    await render_manage_user(callback.message, actor, target_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("roles:toggle:"))
+async def toggle_role(callback: CallbackQuery):
+    actor = callback.from_user.id
+    _, _, role, uid_str = callback.data.split(":")
+    target_id = int(uid_str)
+    if role == "admin":
+        if not (is_super_admin(actor) or is_developer(actor)):
+            logger.warning("toggle_role: deny actor=%d role=%s target=%d", actor, role, target_id)
+            return await callback.answer("Нет прав", show_alert=True)
+        if jobs_service.is_admin(target_id):
+            jobs_service.remove_admin(target_id)
+            logger.info("toggle_role: removed admin actor=%d target=%d", actor, target_id)
+        else:
+            jobs_service.add_admin(target_id)
+            logger.info("toggle_role: added admin actor=%d target=%d", actor, target_id)
+    elif role == "sadmin":
+        if not is_developer(actor):
+            logger.warning("toggle_role: deny actor=%d role=%s target=%d", actor, role, target_id)
+            return await callback.answer("Нет прав", show_alert=True)
+        if jobs_service.is_super_admin(target_id):
+            jobs_service.remove_super_admin(target_id)
+            logger.info("toggle_role: removed sadmin actor=%d target=%d", actor, target_id)
+        else:
+            jobs_service.add_super_admin(target_id)
+            logger.info("toggle_role: added sadmin actor=%d target=%d", actor, target_id)
+    elif role == "dev":
+        if not is_developer(actor):
+            logger.warning("toggle_role: deny actor=%d role=%s target=%d", actor, role, target_id)
+            return await callback.answer("Нет прав", show_alert=True)
+        if jobs_service.is_developer(target_id):
+            jobs_service.remove_developer(target_id)
+            logger.info("toggle_role: removed dev actor=%d target=%d", actor, target_id)
+        else:
+            jobs_service.add_developer(target_id)
+            logger.info("toggle_role: added dev actor=%d target=%d", actor, target_id)
+    else:
+        logger.error("toggle_role: unknown role=%s by actor=%d data=%s", role, actor, callback.data)
+        return await callback.answer("Неизвестная роль", show_alert=True)
+
+    await render_manage_user(callback.message, actor, target_id)
+    await callback.answer()
+
+
+async def render_manage_user(message: Message, actor: int, target_id: int):
+    logger.debug("render_manage_user: actor=%d target=%d", actor, target_id)
+    name = await display_name(message.bot, target_id)
+    tags = []
+    if jobs_service.is_admin(target_id):
+        tags.append("Админ")
+    if jobs_service.is_super_admin(target_id):
+        tags.append("Супер Админ")
+    if jobs_service.is_developer(target_id):
+        tags.append("Разработчик")
+    info = ", ".join(tags) if tags else "без ролей"
+    text = f"👤 {name}\nТекущие роли: {info}"
+
+    kb_rows = []
+    if is_super_admin(actor) or is_developer(actor):
+        if jobs_service.is_admin(target_id):
+            kb_rows.append([InlineKeyboardButton(text="➖ Удалить из Админов", callback_data=f"roles:toggle:admin:{target_id}")])
+        else:
+            kb_rows.append([InlineKeyboardButton(text="➕ Добавить в Админы", callback_data=f"roles:toggle:admin:{target_id}")])
+
+    if is_developer(actor):
+        if jobs_service.is_super_admin(target_id):
+            kb_rows.append([InlineKeyboardButton(text="➖ Удалить из Супер Админов", callback_data=f"roles:toggle:sadmin:{target_id}")])
+        else:
+            kb_rows.append([InlineKeyboardButton(text="➕ Добавить в Супер Админы", callback_data=f"roles:toggle:sadmin:{target_id}")])
+        if jobs_service.is_developer(target_id):
+            kb_rows.append([InlineKeyboardButton(text="➖ Удалить из Разработчиков", callback_data=f"roles:toggle:dev:{target_id}")])
+        else:
+            kb_rows.append([InlineKeyboardButton(text="➕ Добавить в Разработчики", callback_data=f"roles:toggle:dev:{target_id}")])
+    kb_rows.append([InlineKeyboardButton(text="⬅ К списку", callback_data="roles:list_admins")])
+    await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+
+@router.message(RolesEdit.add_admin)
+async def add_admin_finish(message: Message, state: FSMContext):
+    if not (is_super_admin(message.from_user.id) or is_developer(message.from_user.id)):
+        return await message.answer("Нет прав")
+    uid = await resolve_to_user_id(message.text, message.bot)
+    if uid is None:
+        return await message.answer("⚠ Укажите корректный @username или числовой user_id")
+    jobs_service.add_admin(int(uid))
+    await state.clear()
+    await message.answer(
+        "✅ Администратор добавлен",
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(message.from_user.id) or is_developer(message.from_user.id)),
+            can_manage_bot=is_developer(message.from_user.id)
+        )
+    )
+
+@router.message(RolesEdit.remove_admin)
+async def remove_admin_finish(message: Message, state: FSMContext):
+    if not (is_super_admin(message.from_user.id) or is_developer(message.from_user.id)):
+        return await message.answer("Нет прав")
+    uid = await resolve_to_user_id(message.text, message.bot)
+    if uid is None:
+        return await message.answer("⚠ Укажите корректный @username или числовой user_id")
+    jobs_service.remove_admin(int(uid))
+    await state.clear()
+    await message.answer(
+        "✅ Администратор удалён",
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(message.from_user.id) or is_developer(message.from_user.id)),
+            can_manage_bot=is_developer(message.from_user.id)
+        )
+    )
+
+@router.message(RolesEdit.add_sadmin)
+async def add_sadmin_finish(message: Message, state: FSMContext):
+    if not is_developer(message.from_user.id):
+        return await message.answer("Нет прав")
+    uid = await resolve_to_user_id(message.text, message.bot)
+    if uid is None:
+        return await message.answer("⚠ Укажите корректный @username или числовой user_id")
+    jobs_service.add_super_admin(int(uid))
+    await state.clear()
+    await message.answer(
+        "✅ Супер администратор добавлен",
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(message.from_user.id) or is_developer(message.from_user.id)),
+            can_manage_bot=is_developer(message.from_user.id)
+        )
+    )
+
+@router.message(RolesEdit.remove_sadmin)
+async def remove_sadmin_finish(message: Message, state: FSMContext):
+    if not is_developer(message.from_user.id):
+        return await message.answer("Нет прав")
+    uid = await resolve_to_user_id(message.text, message.bot)
+    if uid is None:
+        return await message.answer("⚠ Укажите корректный @username или числовой user_id")
+    jobs_service.remove_super_admin(int(uid))
+    await state.clear()
+    await message.answer(
+        "✅ Супер администратор удалён",
+        reply_markup=Keyboards.admin(
+            jobs_service.get_cities(),
+            can_manage_roles=(is_super_admin(message.from_user.id) or is_developer(message.from_user.id)),
+            can_manage_bot=is_developer(message.from_user.id)
+        )
+    )
+
+# === Управление ботом (только разработчик) ===
+@router.callback_query(F.data == "dev_menu")
+async def dev_menu(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        return await callback.answer("Нет прав", show_alert=True)
+    await callback.message.edit_text("🛠 Управление ботом", reply_markup=Keyboards.dev_controls())
+    await callback.answer()
+
+@router.callback_query(F.data == "dev:restart")
+async def dev_restart(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        return await callback.answer("Нет прав", show_alert=True)
+    await callback.message.answer("🔄 Перезапуск бота...")
+    await callback.answer()
+    try:
+        os.execl(sys.executable, sys.executable, *sys.argv)
+    except Exception:
+        os._exit(0)
+
+@router.callback_query(F.data == "dev:stop")
+async def dev_stop(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        return await callback.answer("Нет прав", show_alert=True)
+    await callback.message.answer("⏹ Остановка бота...")
+    await callback.answer()
+    os._exit(0)
+
 # ==Навигация назад (админ FSM)==
 @router.callback_query(F.data == "admin_back_to_city")
 async def admin_back_city(callback: CallbackQuery, state: FSMContext):
@@ -333,7 +670,11 @@ async def admin_back_city(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.message.edit_text(
             "📍 Выберите город или добавьте новый:",
-            reply_markup=Keyboards.admin(jobs_service.get_cities())
+            reply_markup=Keyboards.admin(
+                jobs_service.get_cities(),
+                can_manage_roles=(is_super_admin(callback.from_user.id) or is_developer(callback.from_user.id)),
+                can_manage_bot=is_developer(callback.from_user.id)
+            )
         )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
