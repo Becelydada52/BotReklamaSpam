@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import CommandStart
@@ -662,6 +662,63 @@ async def dev_stop(callback: CallbackQuery):
     await callback.message.answer("⏹ Остановка бота...")
     await callback.answer()
     os._exit(0)
+
+# === Логи и уровни логирования (только разработчик) ===
+@router.callback_query(F.data == "dev:logs_tail")
+async def dev_logs_tail(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        return await callback.answer("Нет прав", show_alert=True)
+    log_path = os.path.join(os.path.dirname(__file__), "logs", "bot.log")
+    if not os.path.exists(log_path):
+        return await callback.answer("Файл логов ещё не создан", show_alert=True)
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        tail = "".join(lines[-200:])
+        if len(tail) > 3500:
+            tail = tail[-3500:]
+        text = "Последние строки логов:\n" + ("```\n" + tail + "\n```")
+        await callback.message.edit_text(text, reply_markup=Keyboards.dev_controls(), parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Failed to read logs: %s", e)
+        await callback.answer("Не удалось прочитать логи", show_alert=True)
+
+@router.callback_query(F.data == "dev:logs_download")
+async def dev_logs_download(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        return await callback.answer("Нет прав", show_alert=True)
+    log_path = os.path.join(os.path.dirname(__file__), "logs", "bot.log")
+    if not os.path.exists(log_path):
+        return await callback.answer("Файл логов ещё не создан", show_alert=True)
+    try:
+        await callback.message.answer_document(FSInputFile(log_path), caption="Файл логов")
+        await callback.answer()
+    except Exception as e:
+        logger.exception("Failed to send log file: %s", e)
+        await callback.answer("Не удалось отправить файл логов", show_alert=True)
+
+@router.callback_query(F.data == "dev:loglevel")
+async def dev_loglevel(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        return await callback.answer("Нет прав", show_alert=True)
+    current_level = logging.getLevelName(logging.getLogger().level)
+    await callback.message.edit_text(f"Текущий уровень логирования: {current_level}", reply_markup=Keyboards.log_levels(current_level))
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("dev:loglevel:set:"))
+async def dev_set_loglevel(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        return await callback.answer("Нет прав", show_alert=True)
+    level_name = callback.data.split(":")[-1].upper()
+    if level_name not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        return await callback.answer("Неизвестный уровень", show_alert=True)
+    lvl = getattr(logging, level_name)
+    root = logging.getLogger()
+    root.setLevel(lvl)
+    logging.getLogger("aiogram").setLevel(max(logging.INFO, lvl))
+    logger.info("Log level changed to %s by uid=%d", level_name, callback.from_user.id)
+    await callback.message.edit_text(f"Уровень логирования установлен: {level_name}", reply_markup=Keyboards.log_levels(level_name))
+    await callback.answer()
 
 # ==Навигация назад (админ FSM)==
 @router.callback_query(F.data == "admin_back_to_city")

@@ -139,5 +139,24 @@ class Keyboards:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Перезапустить", callback_data="dev:restart")],
             [InlineKeyboardButton(text="⏹ Остановить", callback_data="dev:stop")],
+            [InlineKeyboardButton(text="📄 Логи (последние 200)", callback_data="dev:logs_tail")],
+            [InlineKeyboardButton(text="📥 Скачать лог", callback_data="dev:logs_download")],
+            [InlineKeyboardButton(text="🧭 Уровень логов", callback_data="dev:loglevel")],
             [InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back_to_city")],
         ])
+
+    @staticmethod
+    def log_levels(current: str):
+        labels = [
+            ("DEBUG", "🔎 DEBUG"),
+            ("INFO", "ℹ INFO"),
+            ("WARNING", "⚠ WARNING"),
+            ("ERROR", "❗ ERROR"),
+            ("CRITICAL", "🛑 CRITICAL"),
+        ]
+        rows = []
+        for level, label in labels:
+            mark = " ✅" if current.upper() == level else ""
+            rows.append([InlineKeyboardButton(text=label + mark, callback_data=f"dev:loglevel:set:{level}")])
+        rows.append([InlineKeyboardButton(text="⬅ Назад", callback_data="dev_menu")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
